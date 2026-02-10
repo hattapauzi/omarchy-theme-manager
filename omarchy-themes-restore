@@ -180,7 +180,8 @@ case "$RESTORE_MODE" in
                 else
                     echo "$line"
                 fi
-            done | gum pager --help "↑↓ to scroll, q to exit"
+            gum style --foreground 250 "Tip: use arrow keys to scroll, press q to exit"
+            done | gum pager
         ;;
 esac
 
