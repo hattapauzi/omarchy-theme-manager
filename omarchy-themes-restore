@@ -168,11 +168,12 @@ case "$RESTORE_MODE" in
         
     "👀 Preview only (see what would be restored)")
         gum style --margin "1" --foreground 250 "Themes in backup:"
+        gum style --foreground 250 "Tip: use arrow keys to scroll, press q to exit"
         
         # Show all themes from backup
-        echo "$BACKUP_MANIFEST" | jq -r '.themes[] | 
-            "\(.status): \(.display_name) (\(.type))"' | \
-            while read -r line; do
+        {
+            printf "Themes in backup manifest: %s\n\n" "$BACKUP_MANIFEST"
+            jq -r '.themes[] | "\(.status): \(.display_name) (\(.type))"' "$BACKUP_MANIFEST" | while read -r line; do
                 if [[ $line == installed:* ]]; then
                     gum style --foreground 82 "$line"
                 elif [[ $line == uninstalled:* ]]; then
@@ -180,8 +181,8 @@ case "$RESTORE_MODE" in
                 else
                     echo "$line"
                 fi
-            gum style --foreground 250 "Tip: use arrow keys to scroll, press q to exit"
-            done | gum pager
+            done
+        } | gum pager
         ;;
 esac
 

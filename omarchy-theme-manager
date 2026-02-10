@@ -225,12 +225,15 @@ list_themes() {
         else
             type_icon="🔧"
         fi
-        
-        formatted_list="$formatted_list$(gum style --foreground $color "$icon $type_icon $display_name")\n"
+
+        formatted_list="$formatted_list$(gum style --foreground "$color" "$icon $type_icon $display_name")\n"
     done <<< "$themes"
-    
+
     gum style --foreground 250 "Tip: use arrow keys to scroll, press q to go back"
-    echo -e "$formatted_list" | gum pager
+    {
+        printf "Theme list from manifest.json\n\n"
+        printf "%b" "$formatted_list"
+    } | gum pager
     
     # Ask if user wants to see details
     if gum confirm "View detailed information about a theme?"; then
@@ -615,7 +618,10 @@ backup_themes() {
         "💾 Custom themes: $theme_count themes backed up"
     
     if gum confirm "View backup contents?"; then
-        ls -la "$backup_dir" | gum pager
+        {
+            printf "Backup directory contents: %s\n\n" "$backup_dir"
+            ls -la "$backup_dir"
+        } | gum pager
     fi
 }
 
@@ -704,7 +710,10 @@ restore_themes() {
             ;;
         "Preview only (don't restore)")
             gum style --foreground 250 "Backup contents:"
-            jq -r '.themes[] | "\(.status): \(.display_name) (\(.type))"' "$backup_manifest" | gum pager
+            {
+                printf "Themes in backup manifest: %s\n\n" "$backup_manifest"
+                jq -r '.themes[] | "\(.status): \(.display_name) (\(.type))"' "$backup_manifest"
+            } | gum pager
             ;;
     esac
 }

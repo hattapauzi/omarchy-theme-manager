@@ -119,7 +119,10 @@ gum style --foreground 250 \
 
 # Show README preview
 if gum confirm "View backup README?"; then
-    cat "$BACKUP_DIR/README.txt" | gum pager
+    {
+        printf "Backup README preview: %s\n\n" "$BACKUP_DIR/README.txt"
+        cat "$BACKUP_DIR/README.txt"
+    } | gum pager
 fi
 
 # Offer to open directory
