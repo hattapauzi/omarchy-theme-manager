@@ -1,0 +1,131 @@
+#!/bin/bash
+
+# Omarchy Themes Backup Script
+# Creates a backup of your theme manifest and custom themes
+
+set -e
+
+MANAGER_DIR="$HOME/omarchy-theme-manager"
+MANIFEST_FILE="$MANAGER_DIR/manifest.json"
+USER_THEMES_DIR="$HOME/.config/omarchy/themes"
+
+# Default backup directory
+DEFAULT_BACKUP_DIR="$HOME/omarchy-themes-backup-$(date +%Y%m%d-%H%M%S)"
+BACKUP_DIR="${1:-$DEFAULT_BACKUP_DIR}"
+
+# Expand tilde
+BACKUP_DIR="${BACKUP_DIR/#\~/$HOME}"
+
+# Check if gum is available
+if ! command -v gum &> /dev/null; then
+    echo "Error: 'gum' is not installed."
+    exit 1
+fi
+
+# Check if manifest exists
+if [ ! -f "$MANIFEST_FILE" ]; then
+    gum style --foreground 196 "❌ No manifest found. Run 'omarchy-theme-manager init' first."
+    exit 1
+fi
+
+# Welcome
+gum style --border double --margin "1" --padding "1 2" --foreground 212 \
+    "💾 Backup Omarchy Themes"
+
+# Confirm or get backup directory
+if [ "$BACKUP_DIR" = "$DEFAULT_BACKUP_DIR" ]; then
+    BACKUP_DIR=$(gum input --placeholder "$DEFAULT_BACKUP_DIR" \
+        --header "Backup directory (press Enter for default)" \
+        --value "$DEFAULT_BACKUP_DIR")
+    BACKUP_DIR="${BACKUP_DIR/#\~/$HOME}"
+fi
+
+if [ -z "$BACKUP_DIR" ]; then
+    BACKUP_DIR="$DEFAULT_BACKUP_DIR"
+fi
+
+# Check if directory exists
+if [ -d "$BACKUP_DIR" ]; then
+    if ! gum confirm "Directory already exists. Overwrite?"; then
+        gum style --foreground 208 "Backup cancelled."
+        exit 0
+    fi
+    rm -rf "$BACKUP_DIR"
+fi
+
+# Create backup directory
+mkdir -p "$BACKUP_DIR"
+
+# Copy manifest
+cp "$MANIFEST_FILE" "$BACKUP_DIR/"
+
+# Copy custom themes
+mkdir -p "$BACKUP_DIR/themes"
+
+if [ -d "$USER_THEMES_DIR" ]; then
+    local_count=0
+    for theme_dir in "$USER_THEMES_DIR"/*; do
+        if [ -d "$theme_dir" ]; then
+            theme_name=$(basename "$theme_dir")
+            
+            # Show progress
+            gum style --foreground 39 "📦 Packing: $theme_name"
+            
+            cp -r "$theme_dir" "$BACKUP_DIR/themes/"
+            ((local_count++))
+        fi
+    done
+fi
+
+# Get stats
+total_themes=$(jq '.themes | length' "$MANIFEST_FILE")
+stock_themes=$(jq '[.themes[] | select(.type == "stock")] | length' "$MANIFEST_FILE")
+custom_themes=$(jq '[.themes[] | select(.type == "custom")] | length' "$MANIFEST_FILE")
+installed_themes=$(jq '[.themes[] | select(.status == "installed")] | length' "$MANIFEST_FILE")
+
+# Create README
+cat > "$BACKUP_DIR/README.txt" << EOF
+Omarchy Themes Backup
+====================
+
+Created: $(date)
+Backup Directory: $BACKUP_DIR
+
+Contents:
+---------
+• manifest.json     - Theme database with $total_themes themes
+• themes/           - $local_count custom theme directories
+
+Statistics:
+-----------
+Total Themes: $total_themes
+  - Stock: $stock_themes
+  - Custom: $custom_themes
+  - Installed: $installed_themes
+
+To restore this backup on another machine:
+  omarchy-themes-restore $BACKUP_DIR
+
+Or use the interactive manager:
+  omarchy-theme-manager restore
+EOF
+
+# Summary
+gum style --margin "1" --foreground 82 "✅ Backup created successfully!"
+gum style --foreground 250 \
+    "📁 Location: $BACKUP_DIR" \
+    "📊 Manifest: $total_themes themes" \
+    "💾 Custom themes: ${local_count:-0} themes packed"
+
+# Show README preview
+if gum confirm "View backup README?"; then
+    cat "$BACKUP_DIR/README.txt" | gum pager
+fi
+
+# Offer to open directory
+if gum confirm "Open backup directory?"; then
+    xdg-open "$BACKUP_DIR" 2>/dev/null || true
+fi
+
+echo ""
+gum style --foreground 250 "Your themes are backed up to: $BACKUP_DIR"

@@ -1,0 +1,188 @@
+#!/bin/bash
+
+# Omarchy Themes Restore Script
+# Restores themes from a backup to your system
+
+set -e
+
+MANAGER_DIR="$HOME/omarchy-theme-manager"
+MANIFEST_FILE="$MANAGER_DIR/manifest.json"
+USER_THEMES_DIR="$HOME/.config/omarchy/themes"
+
+# Check if gum is available
+if ! command -v gum &> /dev/null; then
+    echo "Error: 'gum' is not installed."
+    exit 1
+fi
+
+# Welcome
+gum style --border double --margin "1" --padding "1 2" --foreground 212 \
+    "📥 Restore Omarchy Themes"
+
+# Get backup directory
+if [ -n "${1:-}" ]; then
+    BACKUP_DIR="$1"
+else
+    BACKUP_DIR=$(gum input --placeholder "/path/to/backup" --header "Backup directory path")
+fi
+
+# Expand tilde
+BACKUP_DIR="${BACKUP_DIR/#\~/$HOME}"
+
+if [ -z "$BACKUP_DIR" ]; then
+    gum style --foreground 208 "⚠️  No backup directory specified."
+    exit 1
+fi
+
+if [ ! -d "$BACKUP_DIR" ]; then
+    gum style --foreground 196 "❌ Backup directory not found: $BACKUP_DIR"
+    exit 1
+fi
+
+# Check for manifest
+if [ ! -f "$BACKUP_DIR/manifest.json" ]; then
+    gum style --foreground 196 "❌ No manifest.json found in backup directory."
+    exit 1
+fi
+
+# Read backup info
+BACKUP_MANIFEST="$BACKUP_DIR/manifest.json"
+BACKUP_DATE=$(jq -r '.last_updated' "$BACKUP_MANIFEST")
+TOTAL_THEMES=$(jq '.themes | length' "$BACKUP_MANIFEST")
+CUSTOM_BACKUP_COUNT=$(ls -1 "$BACKUP_DIR/themes" 2>/dev/null | wc -l)
+
+# Show backup info
+gum style --margin "1" --border normal --padding "1" \
+    "$(gum style --bold "📦 Backup Information:")" \
+    "   Created: $BACKUP_DATE" \
+    "   Total themes: $TOTAL_THEMES" \
+    "   Custom themes backed up: $CUSTOM_BACKUP_COUNT"
+
+# Choose restore mode
+RESTORE_MODE=$(gum choose \
+    --header "How would you like to restore?" \
+    "🔄 Full restore (replace current manifest)" \
+    "➕ Merge (add backup themes to current manifest)" \
+    "👀 Preview only (see what would be restored)")
+
+case "$RESTORE_MODE" in
+    "🔄 Full restore (replace current manifest)")
+        if gum confirm "⚠️  This will replace your current manifest. Continue?"; then
+            # Backup current manifest first
+            if [ -f "$MANIFEST_FILE" ]; then
+                cp "$MANIFEST_FILE" "$MANIFEST_FILE.backup.$(date +%s)"
+            fi
+            
+            # Copy new manifest
+            cp "$BACKUP_MANIFEST" "$MANIFEST_FILE"
+            
+            # Restore custom themes
+            if [ -d "$BACKUP_DIR/themes" ]; then
+                mkdir -p "$USER_THEMES_DIR"
+                
+                restored_count=0
+                for theme_dir in "$BACKUP_DIR/themes"/*; do
+                    if [ -d "$theme_dir" ]; then
+                        theme_name=$(basename "$theme_dir")
+                        
+                        gum style --foreground 39 "📦 Restoring: $theme_name"
+                        
+                        rm -rf "$USER_THEMES_DIR/$theme_name"
+                        cp -r "$theme_dir" "$USER_THEMES_DIR/"
+                        ((restored_count++))
+                    fi
+                done
+            fi
+            
+            # Update last_updated
+            jq --arg date "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" '.last_updated = $date' "$MANIFEST_FILE" > "$MANIFEST_FILE.tmp"
+            mv "$MANIFEST_FILE.tmp" "$MANIFEST_FILE"
+            
+            gum style --margin "1" --foreground 82 "✅ Full restore completed!"
+            gum style --foreground 250 \
+                "📊 Restored $TOTAL_THEMES themes to manifest" \
+                "💾 Restored ${restored_count:-0} custom theme directories"
+            
+            # Ask to install missing themes
+            missing_themes=$(jq -r '.themes[] | select(.status == "installed" and .type == "custom") | .name' "$MANIFEST_FILE")
+            missing_count=$(echo "$missing_themes" | grep -c '^' || echo "0")
+            
+            if [ "$missing_count" -gt 0 ] && gum confirm "Install $missing_count missing themes from GitHub?"; then
+                while IFS= read -r theme_name; do
+                    if [ -n "$theme_name" ] && [ ! -d "$USER_THEMES_DIR/$theme_name" ]; then
+                        theme_info=$(jq -r --arg name "$theme_name" '.themes[] | select(.name == $name)' "$MANIFEST_FILE")
+                        source_url=$(echo "$theme_info" | jq -r '.source_url // ""')
+                        
+                        if [ -n "$source_url" ] && [ "$source_url" != "null" ]; then
+                            gum style --foreground 39 "⬇️  Installing: $theme_name"
+                            omarchy-theme-install "$source_url" 2>/dev/null || gum style --foreground 208 "  ⚠️  Failed to install $theme_name"
+                        fi
+                    fi
+                done <<< "$missing_themes"
+            fi
+        fi
+        ;;
+        
+    "➕ Merge (add backup themes to current manifest)")
+        gum style --foreground 39 "⏳ Merging manifests..."
+        
+        # Backup current manifest
+        if [ -f "$MANIFEST_FILE" ]; then
+            cp "$MANIFEST_FILE" "$MANIFEST_FILE.backup.$(date +%s)"
+        fi
+        
+        merged_count=0
+        backup_themes=$(jq -c '.themes[]' "$BACKUP_MANIFEST")
+        
+        while IFS= read -r theme; do
+            theme_name=$(echo "$theme" | jq -r '.name')
+            
+            # Check if theme already exists
+            if ! jq -e --arg name "$theme_name" '.themes[] | select(.name == $name)' "$MANIFEST_FILE" > /dev/null 2>&1; then
+                jq --argjson theme "$theme" '.themes += [$theme]' "$MANIFEST_FILE" > "$MANIFEST_FILE.tmp"
+                mv "$MANIFEST_FILE.tmp" "$MANIFEST_FILE"
+                ((merged_count++))
+                gum style --foreground 82 "  + Added: $theme_name"
+            fi
+        done <<< "$backup_themes"
+        
+        # Restore custom themes that don't exist
+        if [ -d "$BACKUP_DIR/themes" ]; then
+            for theme_dir in "$BACKUP_DIR/themes"/*; do
+                if [ -d "$theme_dir" ]; then
+                    theme_name=$(basename "$theme_dir")
+                    if [ ! -d "$USER_THEMES_DIR/$theme_name" ]; then
+                        gum style --foreground 39 "📦 Restoring: $theme_name"
+                        cp -r "$theme_dir" "$USER_THEMES_DIR/"
+                    fi
+                fi
+            done
+        fi
+        
+        # Update timestamp
+        jq --arg date "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" '.last_updated = $date' "$MANIFEST_FILE" > "$MANIFEST_FILE.tmp"
+        mv "$MANIFEST_FILE.tmp" "$MANIFEST_FILE"
+        
+        gum style --margin "1" --foreground 82 "✅ Merged $merged_count new themes!"
+        ;;
+        
+    "👀 Preview only (see what would be restored)")
+        gum style --margin "1" --foreground 250 "Themes in backup:"
+        
+        # Show all themes from backup
+        echo "$BACKUP_MANIFEST" | jq -r '.themes[] | 
+            "\(.status): \(.display_name) (\(.type))"' | \
+            while read -r line; do
+                if [[ $line == installed:* ]]; then
+                    gum style --foreground 82 "$line"
+                elif [[ $line == uninstalled:* ]]; then
+                    gum style --foreground 208 "$line"
+                else
+                    echo "$line"
+                fi
+            done | gum pager --help "↑↓ to scroll, q to exit"
+        ;;
+esac
+
+echo ""
+gum style --foreground 250 "Restore operation completed."

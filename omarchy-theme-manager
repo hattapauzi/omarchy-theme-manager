@@ -1,0 +1,885 @@
+#!/bin/bash
+
+# Omarchy Theme Manager - Interactive CLI Tool
+# Main entry point for managing Omarchy themes with tracking and backup capabilities
+
+set -e
+
+# Configuration
+MANAGER_DIR="$HOME/omarchy-theme-manager"
+MANIFEST_FILE="$MANAGER_DIR/manifest.json"
+USER_THEMES_DIR="$HOME/.config/omarchy/themes"
+STOCK_THEMES_DIR="$HOME/.local/share/omarchy/themes"
+CURRENT_THEME_FILE="$HOME/.config/omarchy/current/theme.name"
+
+# Colors and styling
+BOLD="\033[1m"
+RESET="\033[0m"
+GREEN="\033[32m"
+YELLOW="\033[33m"
+RED="\033[31m"
+BLUE="\033[34m"
+CYAN="\033[36m"
+
+# Check if gum is available
+if ! command -v gum &> /dev/null; then
+    echo -e "${RED}Error: 'gum' is not installed.${RESET}"
+    echo "Please install gum: yay -S gum"
+    exit 1
+fi
+
+# Initialize manifest if it doesn't exist
+init_manifest() {
+    if [ ! -f "$MANIFEST_FILE" ]; then
+        gum style --border double --margin "1" --padding "1 2" --foreground 212 \
+            "🎨 Welcome to Omarchy Theme Manager!" \
+            "" \
+            "No manifest found. Let's initialize it with your current themes."
+        
+        gum spin --spinner dot --title "Scanning themes..." -- bash -c "source $0 && generate_initial_manifest"
+        
+        gum style --margin "1" --foreground 82 "✅ Manifest initialized successfully!"
+    fi
+}
+
+# Generate initial manifest from current themes
+generate_initial_manifest() {
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local current_theme=$(cat "$CURRENT_THEME_FILE" 2>/dev/null || echo "unknown")
+    
+    # Start JSON
+    cat > "$MANIFEST_FILE" << EOF
+{
+  "version": "1.0.0",
+  "last_updated": "$timestamp",
+  "themes": [
+EOF
+    
+    local first=true
+    
+    # Add stock themes
+    for theme_dir in "$STOCK_THEMES_DIR"/*; do
+        if [ -d "$theme_dir" ]; then
+            local name=$(basename "$theme_dir")
+            local display_name=$(echo "$name" | sed -E 's/(^|-)([a-z])/\1\u\2/g; s/-/ /g')
+            local status="installed"
+            local last_active="null"
+            
+            if [ "$name" = "$current_theme" ]; then
+                last_active="\"$timestamp\""
+            fi
+            
+            if [ "$first" = true ]; then
+                first=false
+            else
+                echo "," >> "$MANIFEST_FILE"
+            fi
+            
+            cat >> "$MANIFEST_FILE" << EOF
+    {
+      "name": "$name",
+      "display_name": "$display_name",
+      "type": "stock",
+      "source": "omarchy",
+      "source_url": null,
+      "status": "$status",
+      "installed_date": "$timestamp",
+      "removed_date": null,
+      "last_active_date": $last_active
+    }
+EOF
+        fi
+    done
+    
+    # Add custom themes
+    for theme_dir in "$USER_THEMES_DIR"/*; do
+        if [ -d "$theme_dir" ]; then
+            local name=$(basename "$theme_dir")
+            local display_name=$(echo "$name" | sed -E 's/(^|-)([a-z])/\1\u\2/g; s/-/ /g')
+            local source_url="null"
+            local last_active="null"
+            
+            # Try to get git remote URL
+            if [ -d "$theme_dir/.git" ]; then
+                local git_url=$(cd "$theme_dir" && git remote get-url origin 2>/dev/null || echo "")
+                if [ -n "$git_url" ]; then
+                    source_url="\"$git_url\""
+                fi
+            fi
+            
+            if [ "$name" = "$current_theme" ]; then
+                last_active="\"$timestamp\""
+            fi
+            
+            echo "," >> "$MANIFEST_FILE"
+            
+            cat >> "$MANIFEST_FILE" << EOF
+    {
+      "name": "$name",
+      "display_name": "$display_name",
+      "type": "custom",
+      "source": "git",
+      "source_url": $source_url,
+      "status": "installed",
+      "installed_date": "$timestamp",
+      "removed_date": null,
+      "last_active_date": $last_active
+    }
+EOF
+        fi
+    done
+    
+    # Close JSON
+    cat >> "$MANIFEST_FILE" << EOF
+
+  ]
+}
+EOF
+}
+
+# Show main menu
+show_menu() {
+    local choice=$(gum choose \
+        --header "$(gum style --bold --foreground 212 '🎨 Omarchy Theme Manager')" \
+        --cursor "▶ " \
+        "📋 List themes" \
+        "➕ Add theme to track" \
+        "⬇️  Install theme" \
+        "🗑️  Remove/uninstall theme" \
+        "💾 Backup themes" \
+        "📥 Restore from backup" \
+        "🔄 Sync with system" \
+        "📊 Statistics" \
+        "❌ Quit")
+    
+    case "$choice" in
+        "📋 List themes")
+            list_themes
+            ;;
+        "➕ Add theme to track")
+            add_theme
+            ;;
+        "⬇️  Install theme")
+            install_theme
+            ;;
+        "🗑️  Remove/uninstall theme")
+            remove_theme
+            ;;
+        "💾 Backup themes")
+            backup_themes
+            ;;
+        "📥 Restore from backup")
+            restore_themes
+            ;;
+        "🔄 Sync with system")
+            sync_themes
+            ;;
+        "📊 Statistics")
+            show_statistics
+            ;;
+        "❌ Quit")
+            gum style --margin "1" --foreground 82 "👋 Goodbye!"
+            exit 0
+            ;;
+    esac
+}
+
+# List all themes with filtering
+list_themes() {
+    clear
+    gum style --border double --margin "1" --padding "1 2" --foreground 212 \
+        "📋 Theme Library"
+    
+    # Read themes from manifest
+    local themes=$(jq -r '.themes[] | "\(.name)|\(.type)|\(.status)|\(.source)|\(.display_name)"' "$MANIFEST_FILE" 2>/dev/null)
+    
+    if [ -z "$themes" ]; then
+        gum style --foreground 208 "⚠️  No themes found in manifest."
+        return
+    fi
+    
+    # Create formatted list with status indicators
+    local formatted_list=""
+    while IFS='|' read -r name type status source display_name; do
+        local icon=""
+        local color=""
+        
+        case "$status" in
+            "installed")
+                icon="✅"
+                color="82"
+                ;;
+            "uninstalled")
+                icon="🗑️"
+                color="208"
+                ;;
+            "missing")
+                icon="❌"
+                color="196"
+                ;;
+        esac
+        
+        local type_icon=""
+        if [ "$type" = "stock" ]; then
+            type_icon="📦"
+        else
+            type_icon="🔧"
+        fi
+        
+        formatted_list="$formatted_list$(gum style --foreground $color "$icon $type_icon $display_name")\n"
+    done <<< "$themes"
+    
+    echo -e "$formatted_list" | gum pager --help "↑↓ to scroll, q to go back"
+    
+    # Ask if user wants to see details
+    if gum confirm "View detailed information about a theme?"; then
+        select_theme_for_details
+    fi
+}
+
+# Select a theme to view details
+select_theme_for_details() {
+    local themes=$(jq -r '.themes[] | select(.status != "uninstalled") | "\(.name) (\(.type))"' "$MANIFEST_FILE")
+    
+    if [ -z "$themes" ]; then
+        gum style --foreground 208 "No themes available to view."
+        return
+    fi
+    
+    local selected=$(echo "$themes" | gum filter --placeholder "Search for a theme...")
+    
+    if [ -n "$selected" ]; then
+        local theme_name=$(echo "$selected" | sed 's/ (.*)//')
+        show_theme_details "$theme_name"
+    fi
+}
+
+# Show detailed theme information
+show_theme_details() {
+    local theme_name="$1"
+    local theme_info=$(jq -r --arg name "$theme_name" '.themes[] | select(.name == $name)' "$MANIFEST_FILE")
+    
+    if [ -z "$theme_info" ]; then
+        gum style --foreground 196 "❌ Theme not found: $theme_name"
+        return
+    fi
+    
+    local display_name=$(echo "$theme_info" | jq -r '.display_name')
+    local type=$(echo "$theme_info" | jq -r '.type')
+    local status=$(echo "$theme_info" | jq -r '.status')
+    local source=$(echo "$theme_info" | jq -r '.source')
+    local source_url=$(echo "$theme_info" | jq -r '.source_url // "N/A"')
+    local installed_date=$(echo "$theme_info" | jq -r '.installed_date // "N/A"')
+    local removed_date=$(echo "$theme_info" | jq -r '.removed_date // "N/A"')
+    local last_active=$(echo "$theme_info" | jq -r '.last_active_date // "Never"')
+    
+    clear
+    gum style --border double --margin "1" --padding "1 2" \
+        "$(gum style --bold --foreground 212 "$display_name")" \
+        "" \
+        "$(gum style --bold "Name:")        $theme_name" \
+        "$(gum style --bold "Type:")        $type" \
+        "$(gum style --bold "Status:")      $status" \
+        "$(gum style --bold "Source:")      $source" \
+        "$(gum style --bold "URL:")         $source_url" \
+        "$(gum style --bold "Installed:")   $installed_date" \
+        "$(gum style --bold "Removed:")     $removed_date" \
+        "$(gum style --bold "Last Active:") $last_active"
+    
+    # Action menu
+    local action=$(gum choose \
+        --header "What would you like to do?" \
+        "Set as active" \
+        "Reinstall" \
+        "Remove" \
+        "Back to list")
+    
+    case "$action" in
+        "Set as active")
+            if gum confirm "Set '$display_name' as your active theme?"; then
+                set_active_theme "$theme_name"
+            fi
+            ;;
+        "Reinstall")
+            if gum confirm "Reinstall '$display_name'?"; then
+                reinstall_theme "$theme_name"
+            fi
+            ;;
+        "Remove")
+            if gum confirm "Remove '$display_name' from your system?"; then
+                remove_theme_by_name "$theme_name"
+            fi
+            ;;
+    esac
+}
+
+# Set a theme as active
+set_active_theme() {
+    local theme_name="$1"
+    
+    gum spin --spinner dot --title "Applying theme..." -- omarchy-theme-set "$theme_name"
+    
+    # Update manifest
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    jq --arg name "$theme_name" --arg date "$timestamp" \
+        '(.themes[] | select(.name == $name) | .last_active_date) = $date | .last_updated = $date' \
+        "$MANIFEST_FILE" > "$MANIFEST_FILE.tmp" && mv "$MANIFEST_FILE.tmp" "$MANIFEST_FILE"
+    
+    gum style --foreground 82 "✅ Theme '$theme_name' is now active!"
+}
+
+# Add a new theme to track
+add_theme() {
+    clear
+    gum style --border double --margin "1" --padding "1 2" --foreground 212 \
+        "➕ Add New Theme"
+    
+    # Get theme name
+    local theme_name=$(gum input --placeholder "theme-name" --header "Theme name (lowercase, use hyphens)")
+    
+    if [ -z "$theme_name" ]; then
+        gum style --foreground 208 "⚠️  Theme name is required."
+        return
+    fi
+    
+    # Normalize theme name
+    theme_name=$(echo "$theme_name" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+    
+    # Check if already exists
+    if jq -e --arg name "$theme_name" '.themes[] | select(.name == $name)' "$MANIFEST_FILE" > /dev/null 2>&1; then
+        gum style --foreground 208 "⚠️  Theme '$theme_name' already exists in manifest."
+        if gum confirm "View existing theme?"; then
+            show_theme_details "$theme_name"
+        fi
+        return
+    fi
+    
+    local display_name=$(echo "$theme_name" | sed -E 's/(^|-)([a-z])/\1\u\2/g; s/-/ /g')
+    
+    # Get source type
+    local source_type=$(gum choose \
+        --header "Where is this theme from?" \
+        "GitHub repository" \
+        "Local directory" \
+        "Stock Omarchy theme")
+    
+    local type="custom"
+    local source="git"
+    local source_url="null"
+    
+    case "$source_type" in
+        "GitHub repository")
+            local url=$(gum input --placeholder "https://github.com/user/repo" --header "Git repository URL")
+            if [ -n "$url" ]; then
+                source_url="\"$url\""
+            fi
+            ;;
+        "Local directory")
+            source="local"
+            local path=$(gum input --placeholder "/path/to/theme" --header "Local theme path")
+            if [ -n "$path" ]; then
+                source_url="\"$path\""
+            fi
+            ;;
+        "Stock Omarchy theme")
+            type="stock"
+            source="omarchy"
+            ;;
+    esac
+    
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    
+    # Add to manifest
+    local new_theme=$(cat << EOF
+    {
+      "name": "$theme_name",
+      "display_name": "$display_name",
+      "type": "$type",
+      "source": "$source",
+      "source_url": $source_url,
+      "status": "tracked",
+      "installed_date": "$timestamp",
+      "removed_date": null,
+      "last_active_date": null
+    }
+EOF
+)
+    
+    jq --argjson theme "$new_theme" --arg date "$timestamp" \
+        '.themes += [$theme] | .last_updated = $date' \
+        "$MANIFEST_FILE" > "$MANIFEST_FILE.tmp" && mv "$MANIFEST_FILE.tmp" "$MANIFEST_FILE"
+    
+    gum style --margin "1" --foreground 82 "✅ Added '$display_name' to manifest!"
+    
+    # Ask if they want to install
+    if gum confirm "Install this theme now?"; then
+        install_theme_by_name "$theme_name"
+    fi
+}
+
+# Install a theme interactively
+install_theme() {
+    clear
+    gum style --border double --margin "1" --padding "1 2" --foreground 212 \
+        "⬇️  Install Theme"
+    
+    # Get themes that are not installed
+    local available_themes=$(jq -r '.themes[] | select(.status != "installed") | "\(.name) (\(.type)) - \(.display_name)"' "$MANIFEST_FILE")
+    
+    if [ -z "$available_themes" ]; then
+        gum style --foreground 82 "✅ All tracked themes are already installed!"
+        return
+    fi
+    
+    local selected=$(echo "$available_themes" | gum filter --placeholder "Search for a theme to install...")
+    
+    if [ -n "$selected" ]; then
+        local theme_name=$(echo "$selected" | sed 's/ (.*)//')
+        install_theme_by_name "$theme_name"
+    fi
+}
+
+# Install theme by name
+install_theme_by_name() {
+    local theme_name="$1"
+    local theme_info=$(jq -r --arg name "$theme_name" '.themes[] | select(.name == $name)' "$MANIFEST_FILE")
+    
+    if [ -z "$theme_info" ]; then
+        gum style --foreground 196 "❌ Theme not found in manifest: $theme_name"
+        return 1
+    fi
+    
+    local type=$(echo "$theme_info" | jq -r '.type')
+    local source=$(echo "$theme_info" | jq -r '.source')
+    local source_url=$(echo "$theme_info" | jq -r '.source_url // ""')
+    local display_name=$(echo "$theme_info" | jq -r '.display_name')
+    
+    gum style --margin "1" --foreground 39 "⏳ Installing '$display_name'..."
+    
+    if [ "$type" = "stock" ]; then
+        # Stock themes should already be installed, just mark them
+        gum style --foreground 208 "ℹ️  Stock themes are pre-installed with Omarchy."
+        update_theme_status "$theme_name" "installed"
+        return 0
+    fi
+    
+    if [ "$source" = "git" ] && [ -n "$source_url" ] && [ "$source_url" != "null" ]; then
+        # Install from git
+        if gum spin --spinner dot --title "Cloning from $source_url..." -- bash -c "omarchy-theme-install '$source_url'"; then
+            update_theme_status "$theme_name" "installed"
+            gum style --foreground 82 "✅ Successfully installed '$display_name'!"
+            
+            if gum confirm "Set as active theme?"; then
+                set_active_theme "$theme_name"
+            fi
+        else
+            gum style --foreground 196 "❌ Failed to install '$display_name'."
+            return 1
+        fi
+    elif [ "$source" = "local" ] && [ -n "$source_url" ]; then
+        # Install from local path
+        local local_path=$(echo "$source_url" | tr -d '"')
+        if [ -d "$local_path" ]; then
+            cp -r "$local_path" "$USER_THEMES_DIR/$theme_name"
+            update_theme_status "$theme_name" "installed"
+            gum style --foreground 82 "✅ Copied theme from $local_path"
+        else
+            gum style --foreground 196 "❌ Local path not found: $local_path"
+            return 1
+        fi
+    else
+        gum style --foreground 208 "⚠️  No source URL available for this theme."
+        gum style --foreground 250 "Please provide the source:"
+        add_theme_source "$theme_name"
+    fi
+}
+
+# Update theme status in manifest
+update_theme_status() {
+    local theme_name="$1"
+    local new_status="$2"
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    
+    if [ "$new_status" = "uninstalled" ]; then
+        jq --arg name "$theme_name" --arg status "$new_status" --arg date "$timestamp" \
+            '(.themes[] | select(.name == $name) | .status) = $status | (.themes[] | select(.name == $name) | .removed_date) = $date | .last_updated = $date' \
+            "$MANIFEST_FILE" > "$MANIFEST_FILE.tmp" && mv "$MANIFEST_FILE.tmp" "$MANIFEST_FILE"
+    else
+        jq --arg name "$theme_name" --arg status "$new_status" --arg date "$timestamp" \
+            '(.themes[] | select(.name == $name) | .status) = $status | .last_updated = $date' \
+            "$MANIFEST_FILE" > "$MANIFEST_FILE.tmp" && mv "$MANIFEST_FILE.tmp" "$MANIFEST_FILE"
+    fi
+}
+
+# Remove/uninstall theme
+remove_theme() {
+    clear
+    gum style --border double --margin "1" --padding "1 2" --foreground 212 \
+        "🗑️  Remove Theme"
+    
+    local installed_themes=$(jq -r '.themes[] | select(.status == "installed") | "\(.name) (\(.type)) - \(.display_name)"' "$MANIFEST_FILE")
+    
+    if [ -z "$installed_themes" ]; then
+        gum style --foreground 208 "No installed themes to remove."
+        return
+    fi
+    
+    local selected=$(echo "$installed_themes" | gum filter --placeholder "Search for a theme to remove...")
+    
+    if [ -n "$selected" ]; then
+        local theme_name=$(echo "$selected" | sed 's/ (.*)//')
+        remove_theme_by_name "$theme_name"
+    fi
+}
+
+# Remove theme by name
+remove_theme_by_name() {
+    local theme_name="$1"
+    local theme_info=$(jq -r --arg name "$theme_name" '.themes[] | select(.name == $name)' "$MANIFEST_FILE")
+    
+    local display_name=$(echo "$theme_info" | jq -r '.display_name')
+    local type=$(echo "$theme_info" | jq -r '.type')
+    
+    gum style --border normal --margin "1" --padding "1" --foreground 208 \
+        "⚠️  You are about to remove '$display_name'" \
+        "" \
+        "This will:" \
+        "  • Uninstall the theme from your system" \
+        "  • Mark it as 'uninstalled' in the manifest" \
+        "  • Preserve the source URL for later reinstallation" \
+        "" \
+        "You can reinstall it anytime from the manifest."
+    
+    if gum confirm "Are you sure you want to remove '$display_name'?"; then
+        if [ "$type" = "custom" ]; then
+            if [ -d "$USER_THEMES_DIR/$theme_name" ]; then
+                rm -rf "$USER_THEMES_DIR/$theme_name"
+            fi
+        fi
+        
+        update_theme_status "$theme_name" "uninstalled"
+        gum style --foreground 82 "✅ Removed '$display_name'"
+        gum style --foreground 250 "Source URL preserved. You can reinstall anytime."
+    fi
+}
+
+# Reinstall theme
+reinstall_theme() {
+    local theme_name="$1"
+    install_theme_by_name "$theme_name"
+}
+
+# Backup themes
+backup_themes() {
+    clear
+    gum style --border double --margin "1" --padding "1 2" --foreground 212 \
+        "💾 Backup Themes"
+    
+    local default_backup_dir="$HOME/omarchy-themes-backup-$(date +%Y%m%d-%H%M%S)"
+    local backup_dir=$(gum input --placeholder "$default_backup_dir" --header "Backup directory (press Enter for default)" --value "$default_backup_dir")
+    
+    if [ -z "$backup_dir" ]; then
+        backup_dir="$default_backup_dir"
+    fi
+    
+    # Expand tilde
+    backup_dir="${backup_dir/#\~/$HOME}"
+    
+    if [ -d "$backup_dir" ]; then
+        if ! gum confirm "Directory exists. Overwrite?"; then
+            return
+        fi
+        rm -rf "$backup_dir"
+    fi
+    
+    mkdir -p "$backup_dir"
+    
+    gum spin --spinner dot --title "Creating backup..." -- bash -c "
+        cp '$MANIFEST_FILE' '$backup_dir/'
+        mkdir -p '$backup_dir/themes'
+        for theme_dir in '$USER_THEMES_DIR'/*; do
+            if [ -d \"\$theme_dir\" ]; then
+                cp -r \"\$theme_dir\" '$backup_dir/themes/'
+            fi
+        done
+    "
+    
+    local theme_count=$(ls -1 "$USER_THEMES_DIR" 2>/dev/null | wc -l)
+    local total_themes=$(jq '.themes | length' "$MANIFEST_FILE")
+    
+    gum style --margin "1" --foreground 82 "✅ Backup created successfully!"
+    gum style --foreground 250 \
+        "📁 Location: $backup_dir" \
+        "📊 Manifest: $total_themes themes tracked" \
+        "💾 Custom themes: $theme_count themes backed up"
+    
+    if gum confirm "View backup contents?"; then
+        ls -la "$backup_dir" | gum pager
+    fi
+}
+
+# Restore themes from backup
+restore_themes() {
+    clear
+    gum style --border double --margin "1" --padding "1 2" --foreground 212 \
+        "📥 Restore from Backup"
+    
+    local backup_dir=$(gum input --placeholder "/path/to/backup" --header "Backup directory path")
+    
+    if [ -z "$backup_dir" ]; then
+        gum style --foreground 208 "⚠️  Backup directory is required."
+        return
+    fi
+    
+    backup_dir="${backup_dir/#\~/$HOME}"
+    
+    if [ ! -d "$backup_dir" ]; then
+        gum style --foreground 196 "❌ Backup directory not found: $backup_dir"
+        return
+    fi
+    
+    if [ ! -f "$backup_dir/manifest.json" ]; then
+        gum style --foreground 196 "❌ No manifest.json found in backup directory."
+        return
+    fi
+    
+    # Read backup manifest
+    local backup_manifest="$backup_dir/manifest.json"
+    local backup_date=$(jq -r '.last_updated' "$backup_manifest")
+    local total_themes=$(jq '.themes | length' "$backup_manifest")
+    local custom_themes_count=$(ls -1 "$backup_dir/themes" 2>/dev/null | wc -l)
+    
+    gum style --margin "1" \
+        "📦 Backup Information:" \
+        "   Created: $backup_date" \
+        "   Total themes: $total_themes" \
+        "   Custom themes in backup: $custom_themes_count"
+    
+    local restore_option=$(gum choose \
+        --header "What would you like to restore?" \
+        "Replace current manifest (full restore)" \
+        "Merge with current manifest" \
+        "Preview only (don't restore)")
+    
+    case "$restore_option" in
+        "Replace current manifest (full restore)")
+            if gum confirm "This will replace your current manifest. Continue?"; then
+                cp "$backup_manifest" "$MANIFEST_FILE"
+                
+                # Restore custom themes
+                if [ -d "$backup_dir/themes" ]; then
+                    gum spin --spinner dot --title "Restoring custom themes..." -- bash -c "
+                        for theme_dir in '$backup_dir/themes'/*; do
+                            if [ -d \"\$theme_dir\" ]; then
+                                rm -rf '$USER_THEMES_DIR'/\"\$(basename '\$theme_dir')\"
+                                cp -r \"\$theme_dir\" '$USER_THEMES_DIR/' 2>/dev/null || true
+                            fi
+                        done
+                    "
+                fi
+                
+                gum style --foreground 82 "✅ Full restore completed!"
+            fi
+            ;;
+        "Merge with current manifest")
+            # Merge themes from backup into current manifest
+            gum style --foreground 39 "⏳ Merging manifests..."
+            
+            local backup_themes=$(jq -c '.themes[]' "$backup_manifest")
+            local merged_count=0
+            
+            while IFS= read -r theme; do
+                local theme_name=$(echo "$theme" | jq -r '.name')
+                
+                # Check if theme already exists
+                if ! jq -e --arg name "$theme_name" '.themes[] | select(.name == $name)' "$MANIFEST_FILE" > /dev/null 2>&1; then
+                    jq --argjson theme "$theme" '.themes += [$theme]' "$MANIFEST_FILE" > "$MANIFEST_FILE.tmp"
+                    mv "$MANIFEST_FILE.tmp" "$MANIFEST_FILE"
+                    ((merged_count++))
+                fi
+            done <<< "$backup_themes"
+            
+            gum style --foreground 82 "✅ Merged $merged_count new themes into manifest!"
+            ;;
+        "Preview only (don't restore)")
+            gum style --foreground 250 "Backup contents:"
+            jq -r '.themes[] | "\(.status): \(.display_name) (\(.type))"' "$backup_manifest" | gum pager
+            ;;
+    esac
+}
+
+# Sync themes with system
+sync_themes() {
+    clear
+    gum style --border double --margin "1" --padding "1 2" --foreground 212 \
+        "🔄 Sync with System"
+    
+    gum style --foreground 39 "⏳ Scanning system for themes..."
+    
+    local changes_made=false
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    
+    # Check for themes in filesystem not in manifest
+    local found_new=false
+    for theme_dir in "$USER_THEMES_DIR"/*; do
+        if [ -d "$theme_dir" ]; then
+            local theme_name=$(basename "$theme_dir")
+            if ! jq -e --arg name "$theme_name" '.themes[] | select(.name == $name)' "$MANIFEST_FILE" > /dev/null 2>&1; then
+                found_new=true
+                local display_name=$(echo "$theme_name" | sed -E 's/(^|-)([a-z])/\1\u\2/g; s/-/ /g')
+                local source_url="null"
+                
+                if [ -d "$theme_dir/.git" ]; then
+                    local git_url=$(cd "$theme_dir" && git remote get-url origin 2>/dev/null || echo "")
+                    if [ -n "$git_url" ]; then
+                        source_url="\"$git_url\""
+                    fi
+                fi
+                
+                local new_theme=$(cat << EOF
+    {
+      "name": "$theme_name",
+      "display_name": "$display_name",
+      "type": "custom",
+      "source": "git",
+      "source_url": $source_url,
+      "status": "installed",
+      "installed_date": "$timestamp",
+      "removed_date": null,
+      "last_active_date": null
+    }
+EOF
+)
+                jq --argjson theme "$new_theme" '.themes += [$theme]' "$MANIFEST_FILE" > "$MANIFEST_FILE.tmp"
+                mv "$MANIFEST_FILE.tmp" "$MANIFEST_FILE"
+                changes_made=true
+                
+                gum style --foreground 82 "  + Added: $display_name"
+            fi
+        fi
+    done
+    
+    # Check for themes marked installed but missing
+    local installed_themes=$(jq -r '.themes[] | select(.status == "installed" and .type == "custom") | .name' "$MANIFEST_FILE")
+    while IFS= read -r theme_name; do
+        if [ -n "$theme_name" ] && [ ! -d "$USER_THEMES_DIR/$theme_name" ]; then
+            update_theme_status "$theme_name" "missing"
+            changes_made=true
+            gum style --foreground 208 "  ! Marked missing: $theme_name"
+        fi
+    done <<< "$installed_themes"
+    
+    if [ "$changes_made" = true ]; then
+        jq --arg date "$timestamp" '.last_updated = $date' "$MANIFEST_FILE" > "$MANIFEST_FILE.tmp"
+        mv "$MANIFEST_FILE.tmp" "$MANIFEST_FILE"
+        gum style --margin "1" --foreground 82 "✅ Sync completed!"
+    else
+        gum style --margin "1" --foreground 82 "✅ Everything is in sync!"
+    fi
+}
+
+# Show statistics
+show_statistics() {
+    clear
+    gum style --border double --margin "1" --padding "1 2" --foreground 212 \
+        "📊 Theme Statistics"
+    
+    local total=$(jq '.themes | length' "$MANIFEST_FILE")
+    local installed=$(jq '[.themes[] | select(.status == "installed")] | length' "$MANIFEST_FILE")
+    local uninstalled=$(jq '[.themes[] | select(.status == "uninstalled")] | length' "$MANIFEST_FILE")
+    local missing=$(jq '[.themes[] | select(.status == "missing")] | length' "$MANIFEST_FILE")
+    local stock=$(jq '[.themes[] | select(.type == "stock")] | length' "$MANIFEST_FILE")
+    local custom=$(jq '[.themes[] | select(.type == "custom")] | length' "$MANIFEST_FILE")
+    local last_updated=$(jq -r '.last_updated' "$MANIFEST_FILE")
+    local current_theme=$(cat "$CURRENT_THEME_FILE" 2>/dev/null || echo "unknown")
+    
+    gum style --margin "1" \
+        "$(gum style --bold "📈 Overview:")" \
+        "   Total themes tracked: $total" \
+        "   Stock themes: $stock" \
+        "   Custom themes: $custom" \
+        "" \
+        "$(gum style --bold "📦 Status:")" \
+        "   ✅ Installed: $installed" \
+        "   🗑️  Uninstalled: $uninstalled" \
+        "   ❌ Missing: $missing" \
+        "" \
+        "$(gum style --bold "🎨 Current Theme:") $current_theme" \
+        "$(gum style --bold "📝 Last Updated:") $last_updated"
+    
+    gum confirm "Return to main menu?" || true
+}
+
+# Main function
+main() {
+    # Ensure manager directory exists
+    mkdir -p "$MANAGER_DIR"
+    
+    # Initialize manifest if needed
+    init_manifest
+    
+    # Show welcome on first run
+    if [ ! -f "$MANAGER_DIR/.initialized" ]; then
+        gum style --border double --margin "1" --padding "2" --foreground 212 \
+            "🎨 Welcome to Omarchy Theme Manager!" \
+            "" \
+            "This tool helps you:" \
+            "  • Track all your installed themes" \
+            "  • Keep source URLs for easy reinstallation" \
+            "  • Backup and restore themes across machines" \
+            "  • Remember themes you've tried and removed" \
+            "" \
+            "Your theme manifest has been initialized with $(jq '.themes | length' "$MANIFEST_FILE") themes."
+        
+        touch "$MANAGER_DIR/.initialized"
+        sleep 2
+    fi
+    
+    # Main loop
+    while true; do
+        clear
+        show_menu
+    done
+}
+
+# Handle direct commands for non-interactive usage
+case "${1:-}" in
+    init)
+        generate_initial_manifest
+        ;;
+    list)
+        list_themes
+        ;;
+    add)
+        add_theme
+        ;;
+    install)
+        if [ -n "${2:-}" ]; then
+            install_theme_by_name "$2"
+        else
+            install_theme
+        fi
+        ;;
+    remove)
+        if [ -n "${2:-}" ]; then
+            remove_theme_by_name "$2"
+        else
+            remove_theme
+        fi
+        ;;
+    backup)
+        backup_themes
+        ;;
+    restore)
+        restore_themes
+        ;;
+    sync)
+        sync_themes
+        ;;
+    stats)
+        show_statistics
+        ;;
+    *)
+        main
+        ;;
+esac
