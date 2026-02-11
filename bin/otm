@@ -335,7 +335,7 @@ cmd_list() {
     esac
   fi
 
-  printf "%-20s %-10s %-10s %-14s %-7s %-11s %s\n" "NAME" "TYPE" "STATUS" "ORIGIN" "HAS_URL" "LAST_ACTION" "SOURCE_URL"
+  printf "%-20s %-10s %-10s %-11s %s\n" "NAME" "TYPE" "STATUS" "LAST_ACTION" "SOURCE_URL"
 
   jq -r --arg filter "$filter" '
     .themes[]?
@@ -343,17 +343,30 @@ cmd_list() {
     | [
         .name,
         .status,
-        (.origin // "unknown"),
-        (if .source_url == null or .source_url == "" then "no" else "yes" end),
         (.last_action // "-"),
         (.source_url // "-")
       ]
     | @tsv
-  ' "$REGISTRY_FILE" | while IFS=$'\t' read -r name status origin has_url last_action source_url; do
+  ' "$REGISTRY_FILE" | while IFS=$'\t' read -r name status last_action source_url; do
     local kind
     kind="$(theme_kind "$name")"
-    printf "%-20s %-10s %-10s %-14s %-7s %-11s %s\n" "$name" "$kind" "$status" "$origin" "$has_url" "$last_action" "$source_url"
+    printf "%-20s %-10s %-10s %-11s %s\n" "$name" "$kind" "$status" "$last_action" "$source_url"
   done
+
+  if [ "$filter" != "archived" ]; then
+    local stock_dir
+    stock_dir="$(stock_themes_dir)"
+    if [ -d "$stock_dir" ]; then
+      while IFS= read -r stock_name; do
+        local normalized_name
+        normalized_name="$(normalize_name "$stock_name")"
+        if ! theme_exists_in_registry "$normalized_name"; then
+          printf "%-20s %-10s %-10s %-11s %s\n" \
+            "$normalized_name" "official" "installed" "builtin" "-"
+        fi
+      done < <(find "$stock_dir" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
+    fi
+  fi
 }
 
 cmd_remove() {

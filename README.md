@@ -86,7 +86,7 @@ otm apply [file]
 
 - `scan`: reads local theme directories from `~/.config/omarchy/themes/` and syncs registry.
 - `add`: installs via `omarchy-theme-install <url>`, then records URL + metadata.
-- `list`: includes a `TYPE` column (`official` or `community`) based on Omarchy stock theme directories.
+- `list`: includes a `TYPE` column (`official` or `community`) and shows built-in Omarchy themes even if they are not yet tracked in the registry.
 - `remove`: soft-remove; deletes local theme directory and archives metadata.
 - `restore`: reinstalls archived theme from saved URL.
 - `export`: writes lock file (default `themes.lock.json`).
