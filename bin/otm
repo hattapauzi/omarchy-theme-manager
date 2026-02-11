@@ -8,6 +8,25 @@ REGISTRY_FILE="${CONFIG_DIR}/registry.json"
 USER_THEMES_DIR="${HOME}/.config/omarchy/themes"
 DEFAULT_EXPORT_FILE="themes.lock.json"
 
+stock_themes_dir() {
+  if [ -n "${OMARCHY_PATH:-}" ] && [ -d "${OMARCHY_PATH}/themes" ]; then
+    printf "%s" "${OMARCHY_PATH}/themes"
+  else
+    printf "%s" "${HOME}/.local/share/omarchy/themes"
+  fi
+}
+
+theme_kind() {
+  local name="$1"
+  local stock_dir
+  stock_dir="$(stock_themes_dir)"
+  if [ -d "${stock_dir}/${name}" ]; then
+    printf "official"
+  else
+    printf "community"
+  fi
+}
+
 timestamp() {
   date -u +"%Y-%m-%dT%H:%M:%SZ"
 }
@@ -316,7 +335,7 @@ cmd_list() {
     esac
   fi
 
-  printf "%-20s %-10s %-14s %-7s %-11s %s\n" "NAME" "STATUS" "ORIGIN" "HAS_URL" "LAST_ACTION" "SOURCE_URL"
+  printf "%-20s %-10s %-10s %-14s %-7s %-11s %s\n" "NAME" "TYPE" "STATUS" "ORIGIN" "HAS_URL" "LAST_ACTION" "SOURCE_URL"
 
   jq -r --arg filter "$filter" '
     .themes[]?
@@ -331,7 +350,9 @@ cmd_list() {
       ]
     | @tsv
   ' "$REGISTRY_FILE" | while IFS=$'\t' read -r name status origin has_url last_action source_url; do
-    printf "%-20s %-10s %-14s %-7s %-11s %s\n" "$name" "$status" "$origin" "$has_url" "$last_action" "$source_url"
+    local kind
+    kind="$(theme_kind "$name")"
+    printf "%-20s %-10s %-10s %-14s %-7s %-11s %s\n" "$name" "$kind" "$status" "$origin" "$has_url" "$last_action" "$source_url"
   done
 }
 
