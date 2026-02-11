@@ -58,7 +58,7 @@ Schema (V1):
       "name": "catppuccin",
       "source_url": "https://github.com/example/omarchy-catppuccin-theme.git",
       "status": "installed",
-      "origin": "user",
+      "origin": "example",
       "installed_at": "2026-02-10T10:00:00Z",
       "removed_at": null,
       "last_action": "add"
@@ -68,6 +68,7 @@ Schema (V1):
 ```
 
 Unknown-source themes discovered by `scan` are kept as `installed` with `source_url: null`.
+When a source URL is available, `origin` is set to the repository author/org.
 
 ## Commands
 

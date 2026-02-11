@@ -31,6 +31,22 @@ theme_name_from_url() {
   normalize_name "$repo"
 }
 
+origin_from_url() {
+  local url="$1"
+  local author=""
+
+  author="$(printf "%s" "$url" | sed -nE 's#^https?://[^/]+/([^/]+)/[^/]+(\.git)?$#\1#p')"
+  if [ -z "$author" ]; then
+    author="$(printf "%s" "$url" | sed -nE 's#^git@[^:]+:([^/]+)/[^/]+(\.git)?$#\1#p')"
+  fi
+
+  if [ -n "$author" ]; then
+    printf "%s" "$author"
+  else
+    printf "unknown"
+  fi
+}
+
 error() {
   printf "Error: %s\n" "$1" >&2
 }
@@ -88,12 +104,29 @@ theme_exists_in_registry() {
   jq -e --arg name "$name" '.themes[]? | select(.name == $name)' "$REGISTRY_FILE" >/dev/null 2>&1
 }
 
+detect_theme_source_url() {
+  local theme_path="$1"
+  if ! command -v git >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [ -d "${theme_path}/.git" ]; then
+    git -C "$theme_path" remote get-url origin 2>/dev/null || true
+  fi
+}
+
 registry_upsert_scan() {
   local name="$1"
+  local source_url="${2:-}"
+  local source_origin="unknown"
   local now
   now="$(timestamp)"
 
-  jq --arg name "$name" --arg now "$now" --arg machine "$(machine_id)" '
+  if [ -n "$source_url" ]; then
+    source_origin="$(origin_from_url "$source_url")"
+  fi
+
+  jq --arg name "$name" --arg source_url "$source_url" --arg source_origin "$source_origin" --arg now "$now" --arg machine "$(machine_id)" '
     .updated_at = $now
     | .machine_id = (.machine_id // $machine)
     | .themes = (
@@ -103,15 +136,16 @@ registry_upsert_scan() {
               .status = "installed"
               | .removed_at = null
               | .last_action = "scan"
+              | (if $source_url != "" then .source_url = $source_url | .origin = $source_origin else . end)
               | .origin = (.origin // "unknown")
             else . end
           )
         else
           .themes + [{
             "name": $name,
-            "source_url": null,
+            "source_url": (if $source_url == "" then null else $source_url end),
             "status": "installed",
-            "origin": "unknown",
+            "origin": (if $source_url == "" then "unknown" else $source_origin end),
             "installed_at": $now,
             "removed_at": null,
             "last_action": "scan"
@@ -125,12 +159,15 @@ registry_upsert_user_theme() {
   local name="$1"
   local source_url="$2"
   local action="$3"
+  local source_origin
   local now
   now="$(timestamp)"
+  source_origin="$(origin_from_url "$source_url")"
 
   jq \
     --arg name "$name" \
     --arg source_url "$source_url" \
+    --arg source_origin "$source_origin" \
     --arg action "$action" \
     --arg now "$now" \
     --arg machine "$(machine_id)" '
@@ -141,7 +178,7 @@ registry_upsert_user_theme() {
         .themes | map(
           if .name == $name then
             .source_url = $source_url
-            | .origin = "user"
+            | .origin = $source_origin
             | .status = "installed"
             | .removed_at = null
             | .installed_at = $now
@@ -153,7 +190,7 @@ registry_upsert_user_theme() {
           "name": $name,
           "source_url": $source_url,
           "status": "installed",
-          "origin": "user",
+          "origin": $source_origin,
           "installed_at": $now,
           "removed_at": null,
           "last_action": $action
@@ -205,7 +242,11 @@ cmd_scan() {
   if [ -d "$USER_THEMES_DIR" ]; then
     while IFS= read -r dir_name; do
       local theme
+      local source_url
+      local theme_path
+      theme_path="${USER_THEMES_DIR}/${dir_name}"
       theme="$(normalize_name "$dir_name")"
+      source_url="$(detect_theme_source_url "$theme_path")"
       [ -z "$theme" ] && continue
 
       if theme_exists_in_registry "$theme"; then
@@ -214,13 +255,13 @@ cmd_scan() {
         added_count=$((added_count + 1))
       fi
 
-      registry_upsert_scan "$theme"
+      registry_upsert_scan "$theme" "$source_url"
       scanned_count=$((scanned_count + 1))
     done < <(find "$USER_THEMES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
   fi
 
   printf "Scanned %d local themes.\n" "$scanned_count"
-  printf "Added %d new entries (unknown source).\n" "$added_count"
+  printf "Added %d new entries.\n" "$added_count"
   printf "Updated %d existing entries.\n" "$updated_count"
   printf "Registry: %s\n" "$REGISTRY_FILE"
 }
@@ -275,7 +316,7 @@ cmd_list() {
     esac
   fi
 
-  printf "%-20s %-10s %-8s %-7s %s\n" "NAME" "STATUS" "ORIGIN" "HAS_URL" "LAST_ACTION"
+  printf "%-20s %-10s %-14s %-7s %-11s %s\n" "NAME" "STATUS" "ORIGIN" "HAS_URL" "LAST_ACTION" "SOURCE_URL"
 
   jq -r --arg filter "$filter" '
     .themes[]?
@@ -285,11 +326,12 @@ cmd_list() {
         .status,
         (.origin // "unknown"),
         (if .source_url == null or .source_url == "" then "no" else "yes" end),
-        (.last_action // "-")
+        (.last_action // "-"),
+        (.source_url // "-")
       ]
     | @tsv
-  ' "$REGISTRY_FILE" | while IFS=$'\t' read -r name status origin has_url last_action; do
-    printf "%-20s %-10s %-8s %-7s %s\n" "$name" "$status" "$origin" "$has_url" "$last_action"
+  ' "$REGISTRY_FILE" | while IFS=$'\t' read -r name status origin has_url last_action source_url; do
+    printf "%-20s %-10s %-14s %-7s %-11s %s\n" "$name" "$status" "$origin" "$has_url" "$last_action" "$source_url"
   done
 }
 
