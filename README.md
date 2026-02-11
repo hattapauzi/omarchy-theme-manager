@@ -26,11 +26,14 @@ This project does not replace Omarchy's installer. It uses Omarchy commands dire
 
 ## Install
 
-From this repo:
+Clone and install:
 
 ```bash
+git clone https://github.com/hattapauzi/omarchy-theme-manager.git
+cd omarchy-theme-manager
 chmod +x bin/otm
 chmod +x scripts/install.sh
+chmod +x scripts/uninstall.sh
 ./scripts/install.sh
 ```
 
@@ -38,6 +41,20 @@ Optional convenience symlink:
 
 ```bash
 ln -sf "$PWD/bin/otm" "$HOME/.local/bin/otm"
+```
+
+## Uninstall
+
+Remove the installed `otm` symlink:
+
+```bash
+./scripts/uninstall.sh
+```
+
+Remove the symlink and delete registry data:
+
+```bash
+./scripts/uninstall.sh --remove-registry
 ```
 
 ## Registry
