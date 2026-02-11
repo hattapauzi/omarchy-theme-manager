@@ -1,137 +1,128 @@
-# Omarchy Theme Manager
+# omarchy-theme-manager
 
-A comprehensive theme tracking and management system for Omarchy Linux.
+Foundation CLI for tracking Omarchy themes and restoring them across systems.
 
-## Features
+This project does not replace Omarchy's installer. It uses Omarchy commands directly (`omarchy-theme-install`) and adds lifecycle tracking (`installed` / `archived`) with a registry file.
 
-- 📊 **Track All Themes** - Both stock and custom themes with full metadata
-- 🔗 **Source Preservation** - Keeps GitHub URLs for easy reinstallation
-- 🗑️ **History Tracking** - Remember themes you've uninstalled
-- 💾 **Backup & Restore** - Export/import themes across machines
-- 🔄 **Auto-Sync** - Automatically detects new and missing themes
-- 🎨 **Interactive UI** - Beautiful terminal interface using `gum`
+## Goals covered (V1)
 
-## Installation
+1. Sync and save installed themes on the current system.
+2. Soft-delete themes you do not want right now, while keeping source URLs for restore.
+3. Reinstall tracked themes on another Omarchy system without manual per-theme work.
 
-The theme manager is already installed at `~/omarchy-theme-manager/`
+## Safety rules
 
-All scripts are ready to use immediately.
+- Never writes to `~/.local/share/omarchy/`.
+- Writes only to:
+  - `~/.config/omarchy-theme-manager/registry.json`
+  - `~/.config/omarchy/themes/` (remove operation only)
+  - local export file (default `themes.lock.json`)
 
-## Quick Start
+## Requirements
 
-### Interactive Mode
-```bash
-~/omarchy-theme-manager/omarchy-theme-manager
-```
+- `bash`
+- `jq`
+- Omarchy command available in `PATH`: `omarchy-theme-install`
 
-This launches the interactive menu with options for:
-- 📋 List themes
-- ➕ Add theme to track
-- ⬇️ Install theme
-- 🗑️ Remove/uninstall theme
-- 💾 Backup themes
-- 📥 Restore from backup
-- 🔄 Sync with system
-- 📊 Statistics
+## Install
 
-### Direct Commands
+From this repo:
 
 ```bash
-# Initialize manifest (usually automatic)
-~/omarchy-theme-manager/omarchy-theme-manager init
-
-# Backup all themes
-~/omarchy-theme-manager/omarchy-themes-backup
-
-# Restore from backup
-~/omarchy-theme-manager/omarchy-themes-restore /path/to/backup
-
-# Sync with system
-~/omarchy-theme-manager/omarchy-themes-sync
-
-# Add a theme
-~/omarchy-theme-manager/omarchy-theme-manager add
-
-# Install a theme
-~/omarchy-theme-manager/omarchy-theme-manager install theme-name
-
-# Remove a theme
-~/omarchy-theme-manager/omarchy-theme-manager remove theme-name
+chmod +x bin/otm
+chmod +x scripts/install.sh
+./scripts/install.sh
 ```
 
-## Manifest Structure
+Optional convenience symlink:
 
-The manifest (`manifest.json`) tracks each theme with:
+```bash
+ln -sf "$PWD/bin/otm" "$HOME/.local/bin/otm"
+```
+
+## Registry
+
+Canonical registry path:
+
+`~/.config/omarchy-theme-manager/registry.json`
+
+Schema (V1):
 
 ```json
 {
-  "name": "theme-name",
-  "display_name": "Theme Name",
-  "type": "custom",        // stock or custom
-  "source": "git",         // omarchy, git, or local
-  "source_url": "https://github.com/user/repo",
-  "status": "installed",   // installed, uninstalled, missing
-  "installed_date": "2024-01-15T10:30:00Z",
-  "removed_date": null,
-  "last_active_date": "2024-02-10T09:00:00Z"
+  "version": 1,
+  "updated_at": "2026-02-11T15:30:00Z",
+  "machine_id": "host-abc123",
+  "themes": [
+    {
+      "name": "catppuccin",
+      "source_url": "https://github.com/example/omarchy-catppuccin-theme.git",
+      "status": "installed",
+      "origin": "user",
+      "installed_at": "2026-02-10T10:00:00Z",
+      "removed_at": null,
+      "last_action": "add"
+    }
+  ]
 }
 ```
 
-## Backup Format
+Unknown-source themes discovered by `scan` are kept as `installed` with `source_url: null`.
 
-Backups are created as directories containing:
+## Commands
 
-```
-omarchy-themes-backup-YYYYMMDD-HHMMSS/
-├── manifest.json          # Complete theme database
-├── themes/                # Custom theme files
-│   ├── theme1/
-│   ├── theme2/
-│   └── ...
-└── README.txt            # Backup information
-```
-
-## Auto-Tracking
-
-A hook is installed at `~/.config/omarchy/hooks/theme-set` that automatically:
-- Updates `last_active_date` when you switch themes
-- Adds new custom themes to the manifest if they're not already tracked
-
-## Migration to New Machine
-
-1. **On old machine:**
-   ```bash
-   ~/omarchy-theme-manager/omarchy-themes-backup
-   # Creates ~/omarchy-themes-backup-YYYYMMDD-HHMMSS/
-   ```
-
-2. **Transfer backup folder to new machine** (USB, cloud, etc.)
-
-3. **On new machine:**
-   ```bash
-   ~/omarchy-theme-manager/omarchy-themes-restore /path/to/backup
-   # Choose "Full restore" to get everything
-   # Or "Merge" to combine with existing themes
-   ```
-
-## Statistics
-
-View your theme statistics:
 ```bash
-~/omarchy-theme-manager/omarchy-theme-manager stats
+otm scan
+otm add <git-url>
+otm list [--installed|--archived|--all]
+otm remove <theme>
+otm restore <theme>
+otm export [file]
+otm apply [file]
 ```
 
-Shows:
-- Total themes tracked
-- Stock vs Custom themes
-- Installed vs Uninstalled
-- Currently active theme
-- Last updated timestamp
+### Behavior summary
 
-## Current Themes
+- `scan`: reads local theme directories from `~/.config/omarchy/themes/` and syncs registry.
+- `add`: installs via `omarchy-theme-install <url>`, then records URL + metadata.
+- `remove`: soft-remove; deletes local theme directory and archives metadata.
+- `restore`: reinstalls archived theme from saved URL.
+- `export`: writes lock file (default `themes.lock.json`).
+- `apply`: bulk install all entries with `status=installed` and `source_url` present.
 
-Your manifest currently tracks **30 themes**:
-- **14 stock** themes (pre-installed with Omarchy)
-- **16 custom** themes (installed from GitHub)
+## Typical flows
 
-All with complete metadata including source URLs for easy reinstallation!
+Track what is currently installed:
+
+```bash
+otm scan
+otm list --installed
+```
+
+Install and track a new theme from GitHub:
+
+```bash
+otm add https://github.com/acme/omarchy-solarized-theme.git
+```
+
+Archive a theme now and restore later:
+
+```bash
+otm remove solarized
+otm restore solarized
+```
+
+Move to another machine:
+
+```bash
+otm export themes.lock.json
+# copy themes.lock.json to new system
+otm apply themes.lock.json
+```
+
+## Exit codes
+
+- `0`: success
+- `1`: usage or validation error
+- `2`: command execution failure (install/apply failure)
+- `3`: missing dependency

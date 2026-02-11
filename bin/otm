@@ -1,0 +1,472 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+VERSION="0.1.0"
+CONFIG_DIR="${HOME}/.config/omarchy-theme-manager"
+REGISTRY_FILE="${CONFIG_DIR}/registry.json"
+USER_THEMES_DIR="${HOME}/.config/omarchy/themes"
+DEFAULT_EXPORT_FILE="themes.lock.json"
+
+timestamp() {
+  date -u +"%Y-%m-%dT%H:%M:%SZ"
+}
+
+machine_id() {
+  hostname 2>/dev/null || echo "unknown-host"
+}
+
+normalize_name() {
+  local input="$1"
+  printf "%s" "$input" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[[:space:]_]+/-/g; s/[^a-z0-9-]//g; s/-+/-/g; s/^-+//; s/-+$//'
+}
+
+theme_name_from_url() {
+  local url="$1"
+  local repo
+  repo="$(basename "$url" .git)"
+  repo="$(printf "%s" "$repo" | sed -E 's/^omarchy-//; s/-theme$//')"
+  normalize_name "$repo"
+}
+
+error() {
+  printf "Error: %s\n" "$1" >&2
+}
+
+warn() {
+  printf "Warning: %s\n" "$1" >&2
+}
+
+require_command() {
+  local cmd="$1"
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    error "missing dependency: ${cmd}"
+    exit 3
+  fi
+}
+
+registry_dir_ready() {
+  mkdir -p "$CONFIG_DIR"
+}
+
+init_registry() {
+  registry_dir_ready
+  if [ ! -f "$REGISTRY_FILE" ]; then
+    local now
+    now="$(timestamp)"
+    cat >"$REGISTRY_FILE" <<EOF
+{
+  "version": 1,
+  "updated_at": "${now}",
+  "machine_id": "$(machine_id)",
+  "themes": []
+}
+EOF
+  fi
+}
+
+write_registry_tmp() {
+  local tmp
+  tmp="${REGISTRY_FILE}.tmp"
+  cat >"$tmp"
+  mv "$tmp" "$REGISTRY_FILE"
+}
+
+ensure_registry() {
+  require_command jq
+  init_registry
+  if ! jq empty "$REGISTRY_FILE" >/dev/null 2>&1; then
+    error "registry is not valid JSON: ${REGISTRY_FILE}"
+    exit 1
+  fi
+}
+
+theme_exists_in_registry() {
+  local name="$1"
+  jq -e --arg name "$name" '.themes[]? | select(.name == $name)' "$REGISTRY_FILE" >/dev/null 2>&1
+}
+
+registry_upsert_scan() {
+  local name="$1"
+  local now
+  now="$(timestamp)"
+
+  jq --arg name "$name" --arg now "$now" --arg machine "$(machine_id)" '
+    .updated_at = $now
+    | .machine_id = (.machine_id // $machine)
+    | .themes = (
+        if any(.themes[]?; .name == $name) then
+          .themes | map(
+            if .name == $name then
+              .status = "installed"
+              | .removed_at = null
+              | .last_action = "scan"
+              | .origin = (.origin // "unknown")
+            else . end
+          )
+        else
+          .themes + [{
+            "name": $name,
+            "source_url": null,
+            "status": "installed",
+            "origin": "unknown",
+            "installed_at": $now,
+            "removed_at": null,
+            "last_action": "scan"
+          }]
+        end
+      )
+  ' "$REGISTRY_FILE" | write_registry_tmp
+}
+
+registry_upsert_user_theme() {
+  local name="$1"
+  local source_url="$2"
+  local action="$3"
+  local now
+  now="$(timestamp)"
+
+  jq \
+    --arg name "$name" \
+    --arg source_url "$source_url" \
+    --arg action "$action" \
+    --arg now "$now" \
+    --arg machine "$(machine_id)" '
+    .updated_at = $now
+    | .machine_id = (.machine_id // $machine)
+    | .themes = (
+      if any(.themes[]?; .name == $name) then
+        .themes | map(
+          if .name == $name then
+            .source_url = $source_url
+            | .origin = "user"
+            | .status = "installed"
+            | .removed_at = null
+            | .installed_at = $now
+            | .last_action = $action
+          else . end
+        )
+      else
+        .themes + [{
+          "name": $name,
+          "source_url": $source_url,
+          "status": "installed",
+          "origin": "user",
+          "installed_at": $now,
+          "removed_at": null,
+          "last_action": $action
+        }]
+      end
+    )
+  ' "$REGISTRY_FILE" | write_registry_tmp
+}
+
+registry_mark_archived() {
+  local name="$1"
+  local now
+  now="$(timestamp)"
+
+  jq --arg name "$name" --arg now "$now" --arg machine "$(machine_id)" '
+    .updated_at = $now
+    | .machine_id = (.machine_id // $machine)
+    | .themes = (
+      if any(.themes[]?; .name == $name) then
+        .themes | map(
+          if .name == $name then
+            .status = "archived"
+            | .removed_at = $now
+            | .last_action = "remove"
+          else . end
+        )
+      else
+        .themes + [{
+          "name": $name,
+          "source_url": null,
+          "status": "archived",
+          "origin": "unknown",
+          "installed_at": null,
+          "removed_at": $now,
+          "last_action": "remove"
+        }]
+      end
+    )
+  ' "$REGISTRY_FILE" | write_registry_tmp
+}
+
+cmd_scan() {
+  ensure_registry
+
+  local scanned_count=0
+  local added_count=0
+  local updated_count=0
+
+  if [ -d "$USER_THEMES_DIR" ]; then
+    while IFS= read -r dir_name; do
+      local theme
+      theme="$(normalize_name "$dir_name")"
+      [ -z "$theme" ] && continue
+
+      if theme_exists_in_registry "$theme"; then
+        updated_count=$((updated_count + 1))
+      else
+        added_count=$((added_count + 1))
+      fi
+
+      registry_upsert_scan "$theme"
+      scanned_count=$((scanned_count + 1))
+    done < <(find "$USER_THEMES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
+  fi
+
+  printf "Scanned %d local themes.\n" "$scanned_count"
+  printf "Added %d new entries (unknown source).\n" "$added_count"
+  printf "Updated %d existing entries.\n" "$updated_count"
+  printf "Registry: %s\n" "$REGISTRY_FILE"
+}
+
+cmd_add() {
+  if [ $# -lt 1 ]; then
+    error "usage: otm add <git-url>"
+    exit 1
+  fi
+
+  require_command omarchy-theme-install
+  ensure_registry
+
+  local source_url="$1"
+  local theme
+  theme="$(theme_name_from_url "$source_url")"
+  if [ -z "$theme" ]; then
+    error "unable to derive theme name from URL: ${source_url}"
+    exit 1
+  fi
+
+  printf "Installing theme via Omarchy: %s\n" "$theme"
+  if ! omarchy-theme-install "$source_url"; then
+    error "omarchy-theme-install failed for ${source_url}"
+    exit 2
+  fi
+
+  registry_upsert_user_theme "$theme" "$source_url" "add"
+  printf "Installed successfully.\n"
+  printf "Tracked: %s (source saved)\n" "$theme"
+}
+
+cmd_list() {
+  ensure_registry
+
+  local filter="all"
+  if [ $# -gt 0 ]; then
+    case "$1" in
+      --installed)
+        filter="installed"
+        ;;
+      --archived)
+        filter="archived"
+        ;;
+      --all)
+        filter="all"
+        ;;
+      *)
+        error "usage: otm list [--installed|--archived|--all]"
+        exit 1
+        ;;
+    esac
+  fi
+
+  printf "%-20s %-10s %-8s %-7s %s\n" "NAME" "STATUS" "ORIGIN" "HAS_URL" "LAST_ACTION"
+
+  jq -r --arg filter "$filter" '
+    .themes[]?
+    | select($filter == "all" or .status == $filter)
+    | [
+        .name,
+        .status,
+        (.origin // "unknown"),
+        (if .source_url == null or .source_url == "" then "no" else "yes" end),
+        (.last_action // "-")
+      ]
+    | @tsv
+  ' "$REGISTRY_FILE" | while IFS=$'\t' read -r name status origin has_url last_action; do
+    printf "%-20s %-10s %-8s %-7s %s\n" "$name" "$status" "$origin" "$has_url" "$last_action"
+  done
+}
+
+cmd_remove() {
+  if [ $# -lt 1 ]; then
+    error "usage: otm remove <theme>"
+    exit 1
+  fi
+
+  ensure_registry
+
+  local theme
+  theme="$(normalize_name "$1")"
+  local theme_path="${USER_THEMES_DIR}/${theme}"
+
+  if [ -d "$theme_path" ]; then
+    rm -rf "$theme_path"
+    printf "Removed local directory: %s\n" "$theme_path"
+  elif theme_exists_in_registry "$theme"; then
+    warn "local directory not found, archiving metadata only: ${theme_path}"
+  else
+    error "theme not found locally or in registry: ${theme}"
+    exit 1
+  fi
+
+  registry_mark_archived "$theme"
+  printf "Archived theme: %s\n" "$theme"
+}
+
+cmd_restore() {
+  if [ $# -lt 1 ]; then
+    error "usage: otm restore <theme>"
+    exit 1
+  fi
+
+  require_command omarchy-theme-install
+  ensure_registry
+
+  local theme
+  theme="$(normalize_name "$1")"
+  local source_url
+  source_url="$(jq -r --arg name "$theme" '.themes[]? | select(.name == $name) | .source_url // empty' "$REGISTRY_FILE")"
+
+  if [ -z "$source_url" ]; then
+    error "Theme '${theme}' has no saved source_url."
+    printf "Hint: re-add with 'otm add <git-url>' once to link it.\n" >&2
+    exit 1
+  fi
+
+  printf "Reinstalling from saved source:\n%s\n" "$source_url"
+  if ! omarchy-theme-install "$source_url"; then
+    error "restore failed for theme: ${theme}"
+    exit 2
+  fi
+
+  registry_upsert_user_theme "$theme" "$source_url" "restore"
+  printf "Restore complete: %s\n" "$theme"
+}
+
+cmd_export() {
+  ensure_registry
+  local output_file="${1:-$DEFAULT_EXPORT_FILE}"
+
+  jq '.' "$REGISTRY_FILE" >"$output_file"
+  printf "Exported lock file: %s\n" "$output_file"
+}
+
+cmd_apply() {
+  require_command omarchy-theme-install
+  require_command jq
+
+  local input_file="${1:-$DEFAULT_EXPORT_FILE}"
+  if [ ! -f "$input_file" ]; then
+    error "lock file not found: ${input_file}"
+    exit 1
+  fi
+
+  if ! jq empty "$input_file" >/dev/null 2>&1; then
+    error "invalid JSON lock file: ${input_file}"
+    exit 1
+  fi
+
+  local total
+  total="$(jq '[.themes[]? | select(.status == "installed")] | length' "$input_file")"
+  printf "Applying %s installed themes from lock file...\n" "$total"
+
+  local installed_count=0
+  local skipped_count=0
+  local failed_count=0
+
+  while IFS=$'\t' read -r name source_url; do
+    if [ -z "$source_url" ] || [ "$source_url" = "null" ]; then
+      printf "Skipped: %s (no source_url)\n" "$name"
+      skipped_count=$((skipped_count + 1))
+      continue
+    fi
+
+    if omarchy-theme-install "$source_url"; then
+      printf "Installed: %s\n" "$name"
+      installed_count=$((installed_count + 1))
+    else
+      printf "Failed: %s (clone/install error)\n" "$name"
+      failed_count=$((failed_count + 1))
+    fi
+  done < <(jq -r '.themes[]? | select(.status == "installed") | [.name, (.source_url // "")] | @tsv' "$input_file")
+
+  printf "Done. installed=%d skipped=%d failed=%d\n" "$installed_count" "$skipped_count" "$failed_count"
+
+  if [ "$failed_count" -gt 0 ]; then
+    exit 2
+  fi
+}
+
+usage() {
+  cat <<EOF
+Usage: otm <command> [args]
+
+Commands:
+  scan                  Sync installed local themes into registry
+  add <git-url>         Install theme via Omarchy and track URL
+  list [--installed|--archived|--all]
+                        List tracked themes
+  remove <theme>        Soft-remove theme (archive metadata)
+  restore <theme>       Reinstall an archived theme by saved URL
+  export [file]         Export registry snapshot (default: themes.lock.json)
+  apply [file]          Install all "installed" themes from lock file
+  version               Show tool version
+  help                  Show this help
+
+Registry:
+  ${REGISTRY_FILE}
+EOF
+}
+
+main() {
+  local cmd="${1:-help}"
+  case "$cmd" in
+    scan)
+      shift
+      cmd_scan "$@"
+      ;;
+    add)
+      shift
+      cmd_add "$@"
+      ;;
+    list)
+      shift
+      cmd_list "$@"
+      ;;
+    remove)
+      shift
+      cmd_remove "$@"
+      ;;
+    restore)
+      shift
+      cmd_restore "$@"
+      ;;
+    export)
+      shift
+      cmd_export "$@"
+      ;;
+    apply)
+      shift
+      cmd_apply "$@"
+      ;;
+    version)
+      printf "otm %s\n" "$VERSION"
+      ;;
+    help|-h|--help)
+      usage
+      ;;
+    *)
+      error "unknown command: ${cmd}"
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
