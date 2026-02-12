@@ -48,13 +48,13 @@ ln -sf "$PWD/bin/otm" "$HOME/.local/bin/otm"
 Remove the installed `otm` symlink:
 
 ```bash
-./scripts/uninstall.sh
+bash ./scripts/uninstall.sh
 ```
 
 Remove the symlink and delete registry data:
 
 ```bash
-./scripts/uninstall.sh --remove-registry
+bash ./scripts/uninstall.sh --remove-registry
 ```
 
 ## Registry
