@@ -34,7 +34,7 @@ cd omarchy-theme-manager
 chmod +x bin/otm
 chmod +x scripts/install.sh
 chmod +x scripts/uninstall.sh
-./scripts/install.sh
+bash ./scripts/install.sh
 ```
 
 Optional convenience symlink:
