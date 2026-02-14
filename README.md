@@ -96,7 +96,7 @@ otm list [--installed|--archived|--all]
 otm remove <theme>
 otm restore <theme>
 otm export [file]
-otm apply [file]
+otm import [file]
 ```
 
 ### Behavior summary
@@ -107,7 +107,7 @@ otm apply [file]
 - `remove`: soft-remove; deletes local theme directory and archives metadata.
 - `restore`: reinstalls archived theme from saved URL.
 - `export`: writes lock file (default `themes.lock.json`).
-- `apply`: bulk install all entries with `status=installed` and `source_url` present.
+- `import`: bulk install all entries with `status=installed` and `source_url` present.
 
 ## Typical flows
 
@@ -136,12 +136,12 @@ Move to another machine:
 ```bash
 otm export themes.lock.json
 # copy themes.lock.json to new system
-otm apply themes.lock.json
+otm import themes.lock.json
 ```
 
 ## Exit codes
 
 - `0`: success
 - `1`: usage or validation error
-- `2`: command execution failure (install/apply failure)
+- `2`: command execution failure (install/import failure)
 - `3`: missing dependency

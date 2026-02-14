@@ -433,7 +433,7 @@ cmd_export() {
   printf "Exported lock file: %s\n" "$output_file"
 }
 
-cmd_apply() {
+cmd_import() {
   require_command omarchy-theme-install
   require_command jq
 
@@ -450,7 +450,7 @@ cmd_apply() {
 
   local total
   total="$(jq '[.themes[]? | select(.status == "installed")] | length' "$input_file")"
-  printf "Applying %s installed themes from lock file...\n" "$total"
+  printf "Importing %s installed themes from lock file...\n" "$total"
 
   local installed_count=0
   local skipped_count=0
@@ -491,7 +491,7 @@ Commands:
   remove <theme>        Soft-remove theme (archive metadata)
   restore <theme>       Reinstall an archived theme by saved URL
   export [file]         Export registry snapshot (default: themes.lock.json)
-  apply [file]          Install all "installed" themes from lock file
+  import [file]         Install all "installed" themes from lock file
   version               Show tool version
   help                  Show this help
 
@@ -527,9 +527,9 @@ main() {
       shift
       cmd_export "$@"
       ;;
-    apply)
+    import)
       shift
-      cmd_apply "$@"
+      cmd_import "$@"
       ;;
     version)
       printf "otm %s\n" "$VERSION"
