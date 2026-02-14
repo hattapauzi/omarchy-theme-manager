@@ -219,7 +219,7 @@ registry_upsert_user_theme() {
   ' "$REGISTRY_FILE" | write_registry_tmp
 }
 
-registry_mark_archived() {
+registry_mark_removed() {
   local name="$1"
   local now
   now="$(timestamp)"
@@ -231,7 +231,7 @@ registry_mark_archived() {
       if any(.themes[]?; .name == $name) then
         .themes | map(
           if .name == $name then
-            .status = "archived"
+            .status = "removed"
             | .removed_at = $now
             | .last_action = "remove"
           else . end
@@ -240,7 +240,7 @@ registry_mark_archived() {
         .themes + [{
           "name": $name,
           "source_url": null,
-          "status": "archived",
+          "status": "removed",
           "origin": "unknown",
           "installed_at": null,
           "removed_at": $now,
@@ -322,14 +322,14 @@ cmd_list() {
       --installed)
         filter="installed"
         ;;
-      --archived)
-        filter="archived"
+      --removed)
+        filter="removed"
         ;;
       --all)
         filter="all"
         ;;
       *)
-        error "usage: otm list [--installed|--archived|--all]"
+        error "usage: otm list [--installed|--removed|--all]"
         exit 1
         ;;
     esac
@@ -353,7 +353,7 @@ cmd_list() {
     printf "%-20s %-10s %-10s %-11s %s\n" "$name" "$kind" "$status" "$last_action" "$source_url"
   done
 
-  if [ "$filter" != "archived" ]; then
+  if [ "$filter" != "removed" ]; then
     local stock_dir
     stock_dir="$(stock_themes_dir)"
     if [ -d "$stock_dir" ]; then
@@ -391,7 +391,7 @@ cmd_remove() {
     exit 1
   fi
 
-  registry_mark_archived "$theme"
+  registry_mark_removed "$theme"
   printf "Archived theme: %s\n" "$theme"
 }
 
@@ -486,10 +486,10 @@ Usage: otm <command> [args]
 Commands:
   scan                  Sync installed local themes into registry
   add <git-url>         Install theme via Omarchy and track URL
-  list [--installed|--archived|--all]
+  list [--installed|--removed|--all]
                         List tracked themes
-  remove <theme>        Soft-remove theme (archive metadata)
-  restore <theme>       Reinstall an archived theme by saved URL
+  remove <theme>        Remove theme (mark as removed in registry)
+  restore <theme>       Reinstall a removed theme by saved URL
   export [file]         Export registry snapshot (default: themes.lock.json)
   import [file]         Install all "installed" themes from lock file
   version               Show tool version

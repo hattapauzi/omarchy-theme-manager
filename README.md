@@ -2,7 +2,7 @@
 
 Foundation CLI for tracking Omarchy themes and restoring them across systems.
 
-This project does not replace Omarchy's installer. It uses Omarchy commands directly (`omarchy-theme-install`) and adds lifecycle tracking (`installed` / `archived`) with a registry file.
+This project does not replace Omarchy's installer. It uses Omarchy commands directly (`omarchy-theme-install`) and adds lifecycle tracking (`installed` / `removed`) with a registry file.
 
 ## Goals covered (V1)
 
@@ -92,7 +92,7 @@ When a source URL is available, `origin` is set to the repository author/org.
 ```bash
 otm scan
 otm add <git-url>
-otm list [--installed|--archived|--all]
+otm list [--installed|--removed|--all]
 otm remove <theme>
 otm restore <theme>
 otm export [file]
@@ -104,8 +104,8 @@ otm import [file]
 - `scan`: reads local theme directories from `~/.config/omarchy/themes/` and syncs registry.
 - `add`: installs via `omarchy-theme-install <url>`, then records URL + metadata.
 - `list`: includes a `TYPE` column (`official` or `community`) and shows built-in Omarchy themes even if they are not yet tracked in the registry.
-- `remove`: soft-remove; deletes local theme directory and archives metadata.
-- `restore`: reinstalls archived theme from saved URL.
+- `remove`: deletes local theme directory and marks as removed in registry.
+- `restore`: reinstalls removed theme from saved URL.
 - `export`: writes lock file (default `themes.lock.json`).
 - `import`: bulk install all entries with `status=installed` and `source_url` present.
 
