@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="0.1.1"
 CONFIG_DIR="${HOME}/.config/omarchy-theme-manager"
 REGISTRY_FILE="${CONFIG_DIR}/registry.json"
 USER_THEMES_DIR="${HOME}/.config/omarchy/themes"
@@ -132,6 +132,25 @@ detect_theme_source_url() {
   if [ -d "${theme_path}/.git" ]; then
     git -C "$theme_path" remote get-url origin 2>/dev/null || true
   fi
+}
+
+theme_installed_on_system() {
+  local theme_name="$1"
+  local normalized_name
+  local stock_dir
+
+  normalized_name="$(normalize_name "$theme_name")"
+
+  if [ -d "${USER_THEMES_DIR}/${theme_name}" ] || [ -d "${USER_THEMES_DIR}/${normalized_name}" ]; then
+    return 0
+  fi
+
+  stock_dir="$(stock_themes_dir)"
+  if [ -d "${stock_dir}/${theme_name}" ] || [ -d "${stock_dir}/${normalized_name}" ]; then
+    return 0
+  fi
+
+  return 1
 }
 
 registry_upsert_scan() {
@@ -453,26 +472,37 @@ cmd_import() {
   printf "Importing %s installed themes from lock file...\n" "$total"
 
   local installed_count=0
-  local skipped_count=0
+  local skipped_no_source_count=0
+  local skipped_installed_count=0
   local failed_count=0
 
   while IFS=$'\t' read -r name source_url; do
+    local normalized_name
+    normalized_name="$(normalize_name "$name")"
+
     if [ -z "$source_url" ] || [ "$source_url" = "null" ]; then
-      printf "Skipped: %s (no source_url)\n" "$name"
-      skipped_count=$((skipped_count + 1))
+      printf "Skipped: %s (no source_url)\n" "$normalized_name"
+      skipped_no_source_count=$((skipped_no_source_count + 1))
+      continue
+    fi
+
+    if theme_installed_on_system "$normalized_name"; then
+      printf "Skipped: %s (already installed)\n" "$normalized_name"
+      skipped_installed_count=$((skipped_installed_count + 1))
       continue
     fi
 
     if omarchy-theme-install "$source_url"; then
-      printf "Installed: %s\n" "$name"
+      printf "Installed: %s\n" "$normalized_name"
       installed_count=$((installed_count + 1))
     else
-      printf "Failed: %s (clone/install error)\n" "$name"
+      printf "Failed: %s (clone/install error)\n" "$normalized_name"
       failed_count=$((failed_count + 1))
     fi
   done < <(jq -r '.themes[]? | select(.status == "installed") | [.name, (.source_url // "")] | @tsv' "$input_file")
 
-  printf "Done. installed=%d skipped=%d failed=%d\n" "$installed_count" "$skipped_count" "$failed_count"
+  printf "Done. installed=%d skipped_installed=%d skipped_no_source=%d failed=%d\n" \
+    "$installed_count" "$skipped_installed_count" "$skipped_no_source_count" "$failed_count"
 
   if [ "$failed_count" -gt 0 ]; then
     exit 2

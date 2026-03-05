@@ -107,7 +107,7 @@ otm import [file]
 - `remove`: deletes local theme directory and marks as removed in registry.
 - `restore`: reinstalls removed theme from saved URL.
 - `export`: writes lock file (default `themes.lock.json`).
-- `import`: bulk install all entries with `status=installed` and `source_url` present.
+- `import`: install entries with `status=installed` and `source_url` present, skipping themes already installed locally.
 
 ## Typical flows
 
