@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="0.1.1"
+VERSION="0.1.1-1"
 CONFIG_DIR="${HOME}/.config/omarchy-theme-manager"
 REGISTRY_FILE="${CONFIG_DIR}/registry.json"
 USER_THEMES_DIR="${HOME}/.config/omarchy/themes"
@@ -136,18 +136,41 @@ detect_theme_source_url() {
 
 theme_installed_on_system() {
   local theme_name="$1"
+  local source_url="${2:-}"
   local normalized_name
+  local underscored_name
+  local hyphen_name
+  local candidate
   local stock_dir
+  local dir_name
+  local theme_path
+  local detected_source_url
 
   normalized_name="$(normalize_name "$theme_name")"
+  underscored_name="$(printf "%s" "$normalized_name" | tr '-' '_')"
+  hyphen_name="$(printf "%s" "$normalized_name" | tr '_' '-')"
 
-  if [ -d "${USER_THEMES_DIR}/${theme_name}" ] || [ -d "${USER_THEMES_DIR}/${normalized_name}" ]; then
-    return 0
-  fi
+  for candidate in "$theme_name" "$normalized_name" "$underscored_name" "$hyphen_name"; do
+    if [ -d "${USER_THEMES_DIR}/${candidate}" ]; then
+      return 0
+    fi
+  done
 
   stock_dir="$(stock_themes_dir)"
-  if [ -d "${stock_dir}/${theme_name}" ] || [ -d "${stock_dir}/${normalized_name}" ]; then
-    return 0
+  for candidate in "$theme_name" "$normalized_name" "$underscored_name" "$hyphen_name"; do
+    if [ -d "${stock_dir}/${candidate}" ]; then
+      return 0
+    fi
+  done
+
+  if [ -n "$source_url" ] && command -v git >/dev/null 2>&1 && [ -d "$USER_THEMES_DIR" ]; then
+    while IFS= read -r dir_name; do
+      theme_path="${USER_THEMES_DIR}/${dir_name}"
+      detected_source_url="$(detect_theme_source_url "$theme_path")"
+      if [ -n "$detected_source_url" ] && [ "$detected_source_url" = "$source_url" ]; then
+        return 0
+      fi
+    done < <(find "$USER_THEMES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
   fi
 
   return 1
@@ -486,7 +509,7 @@ cmd_import() {
       continue
     fi
 
-    if theme_installed_on_system "$normalized_name"; then
+    if theme_installed_on_system "$normalized_name" "$source_url"; then
       printf "Skipped: %s (already installed)\n" "$normalized_name"
       skipped_installed_count=$((skipped_installed_count + 1))
       continue
